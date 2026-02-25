@@ -98,6 +98,8 @@ libcvc5_add_sources(
   preprocessing/passes/learned_rewrite.h
   preprocessing/passes/miplib_trick.cpp
   preprocessing/passes/miplib_trick.h
+  preprocessing/passes/nat_to_int.cpp
+  preprocessing/passes/nat_to_int.h
   preprocessing/passes/nl_ext_purify.cpp
   preprocessing/passes/nl_ext_purify.h
   preprocessing/passes/non_clausal_simp.cpp
