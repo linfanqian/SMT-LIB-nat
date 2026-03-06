@@ -9,6 +9,8 @@
 
 #include "preprocessing/passes/nat_to_int.h"
 
+#include <iostream>
+
 #include "preprocessing/assertion_pipeline.h"
 #include "preprocessing/preprocessing_pass_context.h"
 #include "util/rational.h"
@@ -58,6 +60,15 @@ PreprocessingPassResult NatToInt::applyInternal(
         (*assertionsToPreprocess)[i], natVars, natFuncs, visited);
   }
 
+  std::cerr << "[NatToInt] applyInternal: "
+            << assertionsToPreprocess->size() << " assertions, "
+            << natVars.size() << " natVars, "
+            << natFuncs.size() << " natFuncs\n";
+  for (const Node& v : natVars)
+    std::cerr << "  natVar: " << v << " :: " << v.getType() << "\n";
+  for (const Node& f : natFuncs)
+    std::cerr << "  natFunc: " << f << " :: " << f.getType() << "\n";
+
   Node zero = d_nm->mkConstInt(Rational(0));
   std::vector<Node> newAssertions;
 
@@ -66,7 +77,7 @@ PreprocessingPassResult NatToInt::applyInternal(
   // ------------------------------------------------------------------
   for (const Node& natVar : natVars)
   {
-    std::string intName = natVar.getName() + "_int";
+    std::string intName = "lift_" + natVar.getName();
     Node intVar = NodeManager::mkRawSymbol(intName, d_nm->integerType());
     d_varNatToInt.insert(natVar, intVar);
     newAssertions.push_back(d_nm->mkNode(Kind::GEQ, intVar, zero));
@@ -79,7 +90,7 @@ PreprocessingPassResult NatToInt::applyInternal(
   {
     TypeNode origFuncType = natFunc.getType();
     TypeNode intFuncType  = createIntAnalogue(origFuncType);
-    std::string intName   = natFunc.getName() + "_int";
+    std::string intName   = "lift_" + natFunc.getName();
 
     Node intFunc = NodeManager::mkRawSymbol(intName, intFuncType);
     d_funcNatToInt.insert(natFunc, intFunc);
@@ -368,8 +379,9 @@ Node NatToInt::liftQuantifier(TNode n)
   {
     if (isNat(bv.getType()))
     {
-      // Fresh anonymous Int bound variable
-      Node intBv = NodeManager::mkBoundVar(d_nm->integerType());
+      // Fresh Int bound variable named lift_<original>
+      Node intBv = NodeManager::mkBoundVar("lift_" + bv.getName(),
+                                           d_nm->integerType());
       // Register so liftNodeInternal replaces bv -> intBv in the body
       d_varNatToInt.insert(bv, intBv);
       newBvars.push_back(intBv);
