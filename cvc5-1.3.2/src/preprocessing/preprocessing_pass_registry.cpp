@@ -44,6 +44,7 @@
 #include "preprocessing/passes/ite_simp.h"
 #include "preprocessing/passes/learned_rewrite.h"
 #include "preprocessing/passes/miplib_trick.h"
+#include "preprocessing/passes/nat_to_int.h"
 #include "preprocessing/passes/nl_ext_purify.h"
 #include "preprocessing/passes/non_clausal_simp.h"
 #include "preprocessing/passes/pseudo_boolean_processor.h"
@@ -150,6 +151,7 @@ PreprocessingPassRegistry::PreprocessingPassRegistry()
   registerPassInfo("quantifiers-preprocess", callCtor<QuantifiersPreprocess>);
   registerPassInfo("ite-removal", callCtor<IteRemoval>);
   registerPassInfo("miplib-trick", callCtor<MipLibTrick>);
+  registerPassInfo("nat-to-int", callCtor<NatToInt>);
   registerPassInfo("non-clausal-simp", callCtor<NonClausalSimp>);
   registerPassInfo("ackermann", callCtor<Ackermann>);
   registerPassInfo("ext-rew-pre", callCtor<ExtRewPre>);
