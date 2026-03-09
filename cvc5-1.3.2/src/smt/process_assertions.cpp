@@ -137,6 +137,13 @@ bool ProcessAssertions::apply(AssertionPipeline& ap)
       << endl;
 
   applyPass("nat-to-int", ap);
+  if (isOutputOn(OutputTag::NAT_TO_INT))
+  {
+    std::ostream& out = d_env.output(OutputTag::NAT_TO_INT);
+    out << ";; nat-to-int start" << std::endl;
+    dumpAssertionsToStream(out, ap);
+    out << ";; nat-to-int end" << std::endl;
+  }
 
   Trace("smt") << " assertions     : " << ap.size() << endl;
 

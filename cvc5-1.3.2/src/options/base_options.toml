@@ -210,6 +210,11 @@ name   = "Base"
   help = "print a benchmark corresponding to the assertions of the input problem after preprocessing"
   description = "With ``-o post-asserts``, cvc5 prints a benchmark corresponding to the assertions of the input problem after preprocessing."
   example-file = "regress0/printer/post-asserts-output.smt2"
+[[option.mode.NAT_TO_INT]]
+  name = "nat-to-int"
+  help = "print a benchmark corresponding to the assertions after the nat-to-int preprocessing pass"
+  description = "With ``-o nat-to-int``, cvc5 prints a benchmark corresponding to the assertions after the nat-to-int preprocessing pass."
+  example-file = "regress0/printer/post-asserts-output.smt2"
 [[option.mode.PRE_ASSERTS]]
   name = "pre-asserts"
   help = "print a benchmark corresponding to the assertions of the input problem before preprocessing"

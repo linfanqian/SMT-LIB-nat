@@ -11,4 +11,4 @@ fi
 cp "$SCRIPT_DIR/build/src/libcvc5.dll"               "$SCRIPT_DIR/build/bin/libcvc5.dll"
 cp "$SCRIPT_DIR/build/src/parser/libcvc5parser.dll"   "$SCRIPT_DIR/build/bin/libcvc5parser.dll"
 
-"$SCRIPT_DIR/build/bin/cvc5.exe" -o post-asserts "$1"
+"$SCRIPT_DIR/build/bin/cvc5.exe" -o nat-to-int "$1"
