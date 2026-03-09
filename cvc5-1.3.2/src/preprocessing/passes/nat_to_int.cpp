@@ -27,6 +27,36 @@ namespace passes {
 static constexpr bool USE_TOTAL_DEFINITION = true;
 
 // ===========================================================================
+// Prefix → arithmetic Kind table
+// ===========================================================================
+
+Kind NatToInt::prefixToArithKind(const std::string& name)
+{
+  static const struct { const char* prefix; Kind k; } table[] = {
+    { "div_",    Kind::INTS_DIVISION },
+    { "mod_",    Kind::INTS_MODULUS  },
+    { "pow2_",   Kind::POW2          },
+    { "ispow2_", Kind::INTS_ISPOW2   },
+    { "log2_",   Kind::INTS_LOG2     },
+    { "add_",    Kind::ADD            },
+    { "sub_",    Kind::SUB            },
+    { "neg_",    Kind::NEG            },
+    { "mult_",   Kind::MULT           },
+    { "abs_",    Kind::ABS            },
+    { "pow_",    Kind::POW            },
+    { "lt_",     Kind::LT             },
+    { "leq_",    Kind::LEQ            },
+    { "gt_",     Kind::GT             },
+    { "geq_",    Kind::GEQ            },
+  };
+  for (const auto& entry : table)
+  {
+    if (name.rfind(entry.prefix, 0) == 0) return entry.k;
+  }
+  return Kind::UNDEFINED_KIND;
+}
+
+// ===========================================================================
 // Constructor
 // ===========================================================================
 
@@ -36,6 +66,7 @@ NatToInt::NatToInt(PreprocessingPassContext* preprocContext)
       d_varNatToInt(userContext()),
       d_funcNatToInt(userContext()),
       d_liftedNatRetFuncs(userContext()),
+      d_arithNatRetApps(userContext()),
       d_lifted(userContext())
 {
 }
@@ -89,15 +120,62 @@ PreprocessingPassResult NatToInt::applyInternal(
   for (const Node& natFunc : natFuncs)
   {
     TypeNode origFuncType = natFunc.getType();
-    TypeNode intFuncType  = createIntAnalogue(origFuncType);
-    std::string intName   = "lift_" + natFunc.getName();
+    size_t arity          = origFuncType.getNumChildren() - 1;
+    bool retWasNat        = isNat(origFuncType[arity]);
+
+    // Check whether the function name encodes a built-in arithmetic op.
+    Kind arithKind = prefixToArithKind(natFunc.getName());
+    if (arithKind != Kind::UNDEFINED_KIND)
+    {
+      // Map original function -> arithmetic Kind; no UF symbol needed.
+      d_funcArithKind[natFunc] = arithKind;
+
+      // Total definition: add  forall x0,...,xn. (premises) => arithOp(x0,...,xn) >= 0
+      if (USE_TOTAL_DEFINITION && retWasNat && arity > 0)
+      {
+        TypeNode intFuncType = createIntAnalogue(origFuncType);
+        std::vector<Node> bvars;
+        bvars.reserve(arity);
+        for (size_t i = 0; i < arity; ++i)
+        {
+          bvars.push_back(
+              NodeManager::mkBoundVar("x" + std::to_string(i), intFuncType[i]));
+        }
+
+        std::vector<Node> premises;
+        for (size_t i = 0; i < arity; ++i)
+        {
+          if (isNat(origFuncType[i]))
+          {
+            premises.push_back(d_nm->mkNode(Kind::GEQ, bvars[i], zero));
+          }
+        }
+
+        Node app        = d_nm->mkNode(arithKind, bvars);
+        Node conclusion = d_nm->mkNode(Kind::GEQ, app, zero);
+
+        Node body;
+        if (premises.empty())
+          body = conclusion;
+        else if (premises.size() == 1)
+          body = d_nm->mkNode(Kind::IMPLIES, premises[0], conclusion);
+        else
+          body = d_nm->mkNode(
+              Kind::IMPLIES, d_nm->mkNode(Kind::AND, premises), conclusion);
+
+        Node bvList = d_nm->mkNode(Kind::BOUND_VAR_LIST, bvars);
+        newAssertions.push_back(d_nm->mkNode(Kind::FORALL, bvList, body));
+      }
+      continue;
+    }
+
+    TypeNode intFuncType = createIntAnalogue(origFuncType);
+    std::string intName  = "lift_" + natFunc.getName();
 
     Node intFunc = NodeManager::mkRawSymbol(intName, intFuncType);
     d_funcNatToInt.insert(natFunc, intFunc);
 
     // Track whether the original function returned Nat$ (used by both methods)
-    size_t arity   = origFuncType.getNumChildren() - 1;
-    bool retWasNat = isNat(origFuncType[arity]);
     if (retWasNat)
     {
       d_liftedNatRetFuncs.insert(intFunc);
@@ -338,7 +416,29 @@ Node NatToInt::liftNodeInternal(TNode n)
 
   if (n.getMetaKind() == metakind::PARAMETERIZED)
   {
-    Node op  = n.getOperator();
+    Node op = n.getOperator();
+
+    // Check if this UF encodes a built-in arithmetic operation.
+    auto arithIt = d_funcArithKind.find(op);
+    if (arithIt != d_funcArithKind.end())
+    {
+      // Lift arguments and build the arithmetic node (no UF operator).
+      std::vector<Node> arithArgs;
+      for (TNode child : n)
+      {
+        arithArgs.push_back(liftNodeInternal(child));
+      }
+      result = d_nm->mkNode(arithIt->second, arithArgs);
+      // Partial def: track nodes from Nat$-returning arithmetic functions.
+      TypeNode opType = op.getType();
+      if (isNat(opType[opType.getNumChildren() - 1]))
+      {
+        d_arithNatRetApps.insert(result);
+      }
+      d_lifted.insert(n, result);
+      return result;
+    }
+
     NodeMap::iterator fop = d_funcNatToInt.find(op);
     Node newOp = (fop != d_funcNatToInt.end()) ? (*fop).second : op;
     newChildren.push_back(newOp);
@@ -477,6 +577,14 @@ void NatToInt::collectPartialConstraints(TNode liftedExpr,
       Node zero = d_nm->mkConstInt(Rational(0));
       out.push_back(d_nm->mkNode(Kind::GEQ, Node(liftedExpr), zero));
     }
+  }
+
+  // For arithmetic nodes that originated from a Nat$-returning function,
+  // add expr >= 0 at the same scope.
+  if (d_arithNatRetApps.find(Node(liftedExpr)) != d_arithNatRetApps.end())
+  {
+    Node zero = d_nm->mkConstInt(Rational(0));
+    out.push_back(d_nm->mkNode(Kind::GEQ, Node(liftedExpr), zero));
   }
 
   // Recurse into all children (arguments for APPLY_UF, sub-formulas for

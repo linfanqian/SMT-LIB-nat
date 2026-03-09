@@ -66,12 +66,22 @@ class NatToInt : public PreprocessingPass
 
   /** original Nat$ variable/bound-var -> its Int analogue */
   NodeMap d_varNatToInt;
-  /** original Nat$-related function -> its Int-signature analogue */
+  /** original Nat$-related function -> its Int-signature analogue (UF) */
   NodeMap d_funcNatToInt;
+  /** original Nat$-related function -> built-in arithmetic Kind
+   *  (populated when the function name starts with a recognised prefix) */
+  std::unordered_map<Node, Kind> d_funcArithKind;
   /** lifted function nodes whose original return type was Nat$ */
   NodeSet d_liftedNatRetFuncs;
+  /** lifted arithmetic nodes (e.g. (+ a b)) that originated from a
+   *  Nat$-returning arithmetic-prefixed function; used by partial def */
+  NodeSet d_arithNatRetApps;
   /** memoisation: original node -> structurally-lifted node */
   NodeMap d_lifted;
+
+  /** Return the arithmetic Kind encoded by the function name prefix,
+   *  or Kind::UNDEFINED_KIND if the name does not match any prefix. */
+  static Kind prefixToArithKind(const std::string& name);
 
   // -----------------------------------------------------------------------
   // Type helpers
