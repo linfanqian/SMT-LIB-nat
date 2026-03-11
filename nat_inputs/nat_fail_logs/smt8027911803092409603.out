@@ -1,0 +1,5 @@
+(error "Parse Error: nat_inputs/smt8027911803092409603.smt2:46.693: argument type is not the type of the function's argument type:
+argument:  n
+has type:  Nat$
+not type: Int
+in term : (MS1 n x44 s0)")
