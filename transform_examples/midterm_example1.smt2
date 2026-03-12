@@ -1,0 +1,10 @@
+; exchanged nested function example during midterm reivew
+(set-logic ALL)
+(declare-sort Nat$ 0)
+(declare-fun x$ () Nat$)
+(declare-fun g$ (Nat$) Nat$)
+(declare-fun f$ (Nat$) Nat$)
+(declare-fun ge_nat$ (Nat$ Nat$) Bool)
+(assert (! (ge_nat$ (f$ (g$ x$)) 20) :named a0))
+(assert (! (ge_nat$ x$ 5) :named a1))
+(check-sat)

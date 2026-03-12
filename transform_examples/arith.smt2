@@ -1,0 +1,10 @@
+; arithmetic operation handling for Nat$
+(set-logic ALL)
+(declare-sort Nat$ 0)
+(declare-fun x$ () Nat$)
+(declare-fun pow_nat$ (Nat$ Nat$) Nat$)
+(declare-fun sub_nat$ (Nat$ Nat$) Int)
+(declare-fun neg_nat$ (Int) Nat$)
+(declare-fun lt_nat$ (Nat$ Int) Bool)
+(assert (! (lt_nat$ (neg_nat$ (sub_nat$ 100 (pow_nat$ x$ 2))) 0) :named a0))
+(check-sat)

@@ -74,17 +74,30 @@ TypeNode UfTypeRule::computeType(NodeManager* nodeManager,
       TypeNode currentArgumentType = *argument_type_it;
       if (!currentArgument.isComparableTo(currentArgumentType))
       {
-        if (errOut)
+        // Allow Int numerals where a Nat$ argument is expected; the nat-to-int
+        // preprocessing pass lifts Nat$-typed functions to their Int counterparts
+        // before the rewriter sees the assertion.
+        bool natIntMixed =
+            (currentArgumentType.isUninterpretedSort()
+             && currentArgumentType.getName() == "Nat$"
+             && currentArgument.isInteger())
+            || (currentArgument.isUninterpretedSort()
+                && currentArgument.getName() == "Nat$"
+                && currentArgumentType.isInteger());
+        if (!natIntMixed)
         {
-          (*errOut)
-              << "argument type is not the type of the function's argument "
-              << "type:\n"
-              << "argument:  " << *argument_it << "\n"
-              << "has type:  " << (*argument_it).getTypeOrNull() << "\n"
-              << "not type: " << *argument_type_it << "\n"
-              << "in term : " << n;
+          if (errOut)
+          {
+            (*errOut)
+                << "argument type is not the type of the function's argument "
+                << "type:\n"
+                << "argument:  " << *argument_it << "\n"
+                << "has type:  " << (*argument_it).getTypeOrNull() << "\n"
+                << "not type: " << *argument_type_it << "\n"
+                << "in term : " << n;
+          }
+          return TypeNode::null();
         }
-        return TypeNode::null();
       }
     }
   }
