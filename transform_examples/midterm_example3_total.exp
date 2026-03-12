@@ -3,4 +3,5 @@
 (declare-fun lift_f$ (Int Int) Int)
 (assert (forall ((lift_x$ Int)) (=> (>= lift_x$ 0) (exists ((lift_y$ Int)) (and (>= lift_y$ 0) (<= (lift_f$ (lift_g$ lift_x$) lift_y$) (lift_f$ (lift_g$ lift_y$) lift_x$)))))))
 (assert true)
+(assert (forall ((x0 Int)) (=> (>= x0 0) (>= (lift_g$ x0) 0))))
 (check-sat)

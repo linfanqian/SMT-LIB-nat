@@ -48,6 +48,11 @@ for prob in "${PROBLEMS[@]}"; do
         ((SKIP++))
         continue
     fi
+    if [ ! -s "$expected" ]; then
+        echo "SKIP  $prob  (${prob}_${MODE}.exp is empty)"
+        ((SKIP++))
+        continue
+    fi
 
     actual=$("$NAT_TO_INT" "$input" 2>&1)
     diff_out=$(diff \

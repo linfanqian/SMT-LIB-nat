@@ -3,7 +3,7 @@
  * See nat_to_int.h for a full description.
  *
  * ---- method switch ----
- * Set USE_TOTAL_DEFINITION to true  -> total  definition for functions
+ * Set USE_TOTAL_DEFINITION to true  -> total   definition for functions
  *                              false -> partial definition for functions
  */
 
@@ -255,20 +255,17 @@ PreprocessingPassResult NatToInt::applyInternal(
   {
     Node orig   = (*assertionsToPreprocess)[i];
     Node lifted = liftNodeInternal(orig);
+
+    // Partial definition: inject >= 0 constraints at the level of each
+    // atomic predicate that directly contains a Nat$-returning application.
+    if (!USE_TOTAL_DEFINITION)
+    {
+      lifted = injectPartialConstraints(lifted);
+    }
+
     if (lifted != orig)
     {
       assertionsToPreprocess->replace(i, lifted);
-    }
-
-    // partial definition: top-level constraints from the lifted assertion
-    if (!USE_TOTAL_DEFINITION)
-    {
-      std::vector<Node> partialConstraints;
-      collectPartialConstraints(lifted, partialConstraints);
-      for (const Node& c : partialConstraints)
-      {
-        newAssertions.push_back(c);
-      }
     }
   }
 
@@ -507,21 +504,14 @@ Node NatToInt::liftQuantifier(TNode n)
   // --- 2. Lift the body -------------------------------------------------
   Node liftedBody = liftNodeInternal(body);
 
-  // --- 3. (Partial def) fold same-scope body constraints into the body --
+  // --- 3. (Partial def) inject constraints at the correct predicate level --
   //
-  //   collectPartialConstraints stops at nested FORALL/EXISTS, so only
-  //   constraints for the direct body level are returned here.
+  //   injectPartialConstraints recurses through logical connectives so that
+  //   each >= 0 constraint lands alongside the atomic predicate that directly
+  //   contains the Nat$-returning application, not at the formula root.
   if (!USE_TOTAL_DEFINITION)
   {
-    std::vector<Node> bodyConstraints;
-    collectPartialConstraints(liftedBody, bodyConstraints);
-
-    if (!bodyConstraints.empty())
-    {
-      // AND the function constraints in front of the body
-      bodyConstraints.push_back(liftedBody);
-      liftedBody = d_nm->mkNode(Kind::AND, bodyConstraints);
-    }
+    liftedBody = injectPartialConstraints(liftedBody);
   }
 
   // --- 4. Apply non-negativity guard for Nat$ bound vars ----------------
@@ -602,6 +592,50 @@ void NatToInt::collectPartialConstraints(TNode liftedExpr,
   {
     collectPartialConstraints(child, out);
   }
+}
+
+// ===========================================================================
+// Partial definition — constraint injection
+// ===========================================================================
+
+Node NatToInt::injectPartialConstraints(TNode n)
+{
+  Kind k = n.getKind();
+
+  // Stop at quantifier boundaries — liftQuantifier already injected
+  // constraints into the quantifier body.
+  if (k == Kind::FORALL || k == Kind::EXISTS)
+  {
+    return Node(n);
+  }
+
+  // Logical connectives: recurse into each sub-formula so that constraints
+  // land alongside the atomic predicate that contains the function application,
+  // not at the root of the whole formula.
+  if (k == Kind::AND || k == Kind::OR || k == Kind::IMPLIES)
+  {
+    bool changed = false;
+    std::vector<Node> newChildren;
+    for (TNode child : n)
+    {
+      Node nc = injectPartialConstraints(child);
+      newChildren.push_back(nc);
+      changed = changed || (nc != child);
+    }
+    return changed ? d_nm->mkNode(k, newChildren) : Node(n);
+  }
+
+  // Atomic formula (comparison, predicate application, equality, etc.):
+  // collect all >= 0 constraints from Nat$-returning sub-expressions and
+  // prepend them as a conjunction at this level.
+  std::vector<Node> constraints;
+  collectPartialConstraints(n, constraints);
+  if (constraints.empty())
+  {
+    return Node(n);
+  }
+  constraints.push_back(Node(n));
+  return d_nm->mkNode(Kind::AND, constraints);
 }
 
 }  // namespace passes

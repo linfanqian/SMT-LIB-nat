@@ -133,6 +133,14 @@ class NatToInt : public PreprocessingPass
    *  scope. */
   void collectPartialConstraints(TNode liftedExpr,
                                  std::vector<Node>& out);
+
+  /** Walk an already-lifted formula and inject >= 0 constraints at the level
+   *  of each atomic predicate that directly contains a Nat$-returning
+   *  application.  Logical connectives (AND, OR, IMPLIES) are treated as
+   *  transparent: the method recurses through them so that constraints end up
+   *  alongside the innermost predicate, not at the formula root.
+   *  Stops at FORALL/EXISTS boundaries (liftQuantifier handles those). */
+  Node injectPartialConstraints(TNode liftedFormula);
 };
 
 }  // namespace passes

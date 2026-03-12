@@ -1,0 +1,6 @@
+(set-logic ALL)
+(declare-fun lift_x$ () Int)
+(assert (and (>= (- (- 100 (^ lift_x$ 2))) 0) (>= (^ lift_x$ 2) 0) (< (- (- 100 (^ lift_x$ 2))) 0)))
+(assert true)
+(assert (>= lift_x$ 0))
+(check-sat)

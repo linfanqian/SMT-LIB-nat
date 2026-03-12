@@ -1,0 +1,4 @@
+(set-logic ALL)
+(assert (and (>= (+ 5 10) 0) (> (+ 5 10) 20)))
+(assert true)
+(check-sat)
