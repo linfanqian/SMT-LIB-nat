@@ -361,7 +361,8 @@ void NatToInt::collectNatSymbols(TNode root,
       // Only free variables of sort Nat$; bound variables are handled inside
       // liftQuantifier when the enclosing FORALL/EXISTS is processed.
       TypeNode tn = cur.getType();
-      if (isNat(tn) && cur.getKind() != Kind::BOUND_VARIABLE)
+      if (isNat(tn) && cur.getKind() != Kind::BOUND_VARIABLE
+          && cur.getKind() != Kind::CONST_INTEGER)
       {
         natVars.insert(cur);
       }
@@ -404,6 +405,13 @@ Node NatToInt::liftNodeInternal(TNode n)
   // registered by an enclosing liftQuantifier call)
   if (n.getNumChildren() == 0)
   {
+    // Integer literal used as Nat$ value: re-emit as a proper Int constant.
+    if (n.getKind() == Kind::CONST_INTEGER)
+    {
+      result = d_nm->mkConstInt(n.getConst<Rational>());
+      d_lifted.insert(n, result);
+      return result;
+    }
     NodeMap::iterator vit = d_varNatToInt.find(n);
     result = (vit != d_varNatToInt.end()) ? (*vit).second : Node(n);
     d_lifted.insert(n, result);

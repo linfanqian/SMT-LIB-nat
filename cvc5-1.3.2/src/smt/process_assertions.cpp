@@ -127,15 +127,9 @@ bool ProcessAssertions::apply(AssertionPipeline& ap)
   Trace("smt-proc")
       << "ProcessAssertions::processAssertions() : pre-definition-expansion"
       << endl;
-  // Apply substitutions first. If we are non-incremental, this has only the
-  // effect of replacing defined functions with their definitions.
-  // We do not call theory-specific expand definitions here, since we want
-  // to give the opportunity to rewrite/preprocess terms before expansion.
-  applyPass("apply-substs", ap);
-  Trace("smt-proc")
-      << "ProcessAssertions::processAssertions() : post-definition-expansion"
-      << endl;
-
+  // Run nat-to-int before apply-substs so that the rewriter inside apply-substs
+  // sees well-typed integer assertions rather than ill-typed Nat$/Int mixtures
+  // (e.g. (= x$ 1) where x$ : Nat$ and 1 : Int).
   applyPass("nat-to-int", ap);
   if (isOutputOn(OutputTag::NAT_TO_INT))
   {
@@ -144,6 +138,16 @@ bool ProcessAssertions::apply(AssertionPipeline& ap)
     dumpAssertionsToStream(out, ap);
     out << ";; nat-to-int end" << std::endl;
   }
+
+  // Apply substitutions. If we are non-incremental, this has only the
+  // effect of replacing defined functions with their definitions.
+  // We do not call theory-specific expand definitions here, since we want
+  // to give the opportunity to rewrite/preprocess terms before expansion.
+  applyPass("apply-substs", ap);
+  Trace("smt-proc")
+      << "ProcessAssertions::processAssertions() : post-definition-expansion"
+      << endl;
+
 
   Trace("smt") << " assertions     : " << ap.size() << endl;
 

@@ -40,14 +40,25 @@ TypeNode EqualityTypeRule::computeType(NodeManager* nodeManager,
     TypeNode rhsType = n[1].getTypeOrNull();
     if (!lhsType.isComparableTo(rhsType))
     {
-      if (errOut)
+      // Allow Nat$ (uninterpreted sort) to be equated with Int literals;
+      // the nat-to-int preprocessing pass (which runs before apply-substs)
+      // will lift both sides to Int before the rewriter sees the assertion.
+      bool natIntMixed =
+          (lhsType.isUninterpretedSort() && lhsType.getName() == "Nat$"
+           && rhsType.isInteger())
+          || (rhsType.isUninterpretedSort() && rhsType.getName() == "Nat$"
+              && lhsType.isInteger());
+      if (!natIntMixed)
       {
-        (*errOut) << "Subexpressions must have the same type:" << std::endl;
-        (*errOut) << "Equation: " << n << std::endl;
-        (*errOut) << "Type 1: " << lhsType << std::endl;
-        (*errOut) << "Type 2: " << rhsType << std::endl;
+        if (errOut)
+        {
+          (*errOut) << "Subexpressions must have the same type:" << std::endl;
+          (*errOut) << "Equation: " << n << std::endl;
+          (*errOut) << "Type 1: " << lhsType << std::endl;
+          (*errOut) << "Type 2: " << rhsType << std::endl;
+        }
+        return TypeNode::null();
       }
-      return TypeNode::null();
     }
   }
   return nodeManager->booleanType();
