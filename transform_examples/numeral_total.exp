@@ -1,0 +1,5 @@
+(set-logic ALL)
+(assert (> (+ 5 10) 20))
+(assert true)
+(assert (forall ((x0 Int) (x1 Int)) (=> (and (>= x0 0) (>= x1 0)) (>= (+ x0 x1) 0))))
+(check-sat)

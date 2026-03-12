@@ -1,0 +1,7 @@
+(set-logic ALL)
+(declare-fun lift_n$ () Int)
+(assert (forall ((lift_x$ Int)) (=> (>= lift_x$ 0) (not (= lift_x$ 1)))))
+(assert (exists ((lift_x$ Int)) (and (>= lift_x$ 0) (not (= lift_x$ lift_n$)))))
+(assert true)
+(assert (>= lift_n$ 0))
+(check-sat)

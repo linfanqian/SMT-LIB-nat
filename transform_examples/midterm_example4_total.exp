@@ -1,0 +1,8 @@
+(set-logic ALL)
+(declare-fun lift_y$ () Int)
+(declare-fun lift_f$ (Int Bool) Int)
+(assert (forall ((lift_x$ Int) (b$ Bool)) (=> (>= lift_x$ 0) (= (lift_f$ lift_x$ b$) (lift_f$ lift_y$ b$)))))
+(assert true)
+(assert (>= lift_y$ 0))
+(assert (forall ((x0 Int) (x1 Bool)) (=> (>= x0 0) (>= (lift_f$ x0 x1) 0))))
+(check-sat)

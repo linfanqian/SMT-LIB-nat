@@ -1,0 +1,8 @@
+(set-logic ALL)
+(declare-fun lift_x$ () Int)
+(assert (< (- (- 100 (^ lift_x$ 2))) 0))
+(assert true)
+(assert (>= lift_x$ 0))
+(assert (forall ((x0 Int) (x1 Int)) (=> (and (>= x0 0) (>= x1 0)) (>= (^ x0 x1) 0))))
+(assert (forall ((x0 Int)) (>= (- x0) 0)))
+(check-sat)

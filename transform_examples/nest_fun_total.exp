@@ -1,0 +1,8 @@
+(set-logic ALL)
+(declare-fun f$ (Int) Int)
+(declare-fun lift_h$ (Int) Int)
+(declare-fun lift_g$ (Int) Int)
+(assert (exists ((lift_x$ Int)) (and (>= lift_x$ 0) (= (f$ (lift_g$ (lift_h$ lift_x$))) 0))))
+(assert true)
+(assert (forall ((x0 Int)) (=> (>= x0 0) (>= (lift_h$ x0) 0))))
+(check-sat)
