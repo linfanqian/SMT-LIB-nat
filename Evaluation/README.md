@@ -1,0 +1,1 @@
+We start from 40 raw selected SMT-LIB benchmarks. From this fixed base set, we generate three benchmark families: Nat$ -> Int, Int -> Nat$, and Nat$ -> Nat$. The generated families in Evaluation/rewritten_problems/ are the final benchmark sets used in evaluation. Running Evaluation/scripts/generate_benchmark_families.sh regenerates these families.
