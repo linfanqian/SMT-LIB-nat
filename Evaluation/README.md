@@ -7,4 +7,4 @@
   - chmod +x Evaluation/scripts/inject_composed_bridge_on_natvar_200.sh
   - chmod +x Evaluation/scripts/run_final_eval.sh
   - chmod +x Evaluation/scripts/verify_benchmarks.sh
-- To run the evaluation, use bash evaluate.sh 
+- To run the evaluation, use command ./evaluate.sh 
