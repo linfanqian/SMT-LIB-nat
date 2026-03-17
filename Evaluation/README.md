@@ -2,8 +2,9 @@
 
 - In scripts, rewrite_selected_to_nat.py is the script that was used to generate Nat$->Int family, inject_nat_step.sh was used to generate Nat$ -> Nat$ family, and inject_composed_bridge_on_natvar_200.sh was used to generate Int-> Nat$ family. 
 
-- run these commands before regenerating the benchmarks.
+- Run these commands before regenerating the benchmarks.
   - chmod +x Evaluation/scripts/inject_nat_step.sh
   - chmod +x Evaluation/scripts/inject_composed_bridge_on_natvar_200.sh
   - chmod +x Evaluation/scripts/run_final_eval.sh
   - chmod +x Evaluation/scripts/verify_benchmarks.sh
+- To run the evaluation, use bash evaluate.sh 
