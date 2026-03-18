@@ -3,13 +3,12 @@
  * See nat_to_int.h for a full description.
  *
  * ---- method switch ----
- * Set USE_TOTAL_DEFINITION to true  -> total   definition for functions
- *                              false -> partial definition for functions
+ * Set USE_TOTAL_DEFINITION to true  -> total definition for functions
+ *                             false -> partial definition for functions
+ * This file has Claude Code generated code
  */
 
 #include "preprocessing/passes/nat_to_int.h"
-
-#include <iostream>
 
 #include "preprocessing/assertion_pipeline.h"
 #include "preprocessing/preprocessing_pass_context.h"
@@ -67,9 +66,16 @@ NatToInt::NatToInt(PreprocessingPassContext* preprocContext)
       d_funcNatToInt(userContext()),
       d_liftedNatRetFuncs(userContext()),
       d_arithNatRetApps(userContext()),
+      d_liftedNatBVarSet(userContext()),
       d_lifted(userContext())
 {
 }
+
+// Forward declaration — defined after liftBoundVar below.
+static Node applyBoundVarSubst(NodeManager* nm,
+                                TNode n,
+                                const std::unordered_map<Node, Node>& subst,
+                                std::unordered_map<Node, Node>& cache);
 
 // ===========================================================================
 // applyInternal
@@ -79,202 +85,140 @@ PreprocessingPassResult NatToInt::applyInternal(
     AssertionPipeline* assertionsToPreprocess)
 {
   // ------------------------------------------------------------------
-  // Phase 1: collect Nat$-related symbols from all assertions
+  // Pre-work: collect Nat$-related symbols from all assertions.
   // ------------------------------------------------------------------
-  std::unordered_set<Node> natVars;
-  std::unordered_set<Node> natFuncs;
+  std::unordered_set<Node> natFreeVars;
+  std::unordered_set<Node> natUFFuncs;
+  std::unordered_set<Node> natArithFuncs;
+  std::unordered_set<Node> natQuantifiers;
   std::unordered_set<Node> visited;
 
   for (size_t i = 0, n = assertionsToPreprocess->size(); i < n; ++i)
-  {
-    collectNatSymbols(
-        (*assertionsToPreprocess)[i], natVars, natFuncs, visited);
-  }
-
-  std::cerr << "[NatToInt] applyInternal: "
-            << assertionsToPreprocess->size() << " assertions, "
-            << natVars.size() << " natVars, "
-            << natFuncs.size() << " natFuncs\n";
-  for (const Node& v : natVars)
-    std::cerr << "  natVar: " << v << " :: " << v.getType() << "\n";
-  for (const Node& f : natFuncs)
-    std::cerr << "  natFunc: " << f << " :: " << f.getType() << "\n";
-
-  Node zero = d_nm->mkConstInt(Rational(0));
-  std::vector<Node> newAssertions;
+    collectNatSymbols((*assertionsToPreprocess)[i],
+                      natFreeVars, natUFFuncs, natArithFuncs,
+                      natQuantifiers, visited);
 
   // ------------------------------------------------------------------
-  // Phase 2a: lift free Nat$ variables to Int, add v' >= 0
+  // Step 1: Rewrite Nat$ to Int (shared).
+  //   1a. Register each free Nat$ variable as a fresh Int variable.
+  //   1b. For each quantifier in natQuantifiers, register each of its
+  //       Nat$ bound variables as a fresh Int bound variable and record
+  //       it in d_liftedNatBVarSet for step 2b.
+  //   1c. Register each non-arithmetic Nat$-related UF as its Int analogue.
+  //   1d. Register each arithmetic Nat$-related function in d_funcArithKind.
+  //   1e. Structurally lift every assertion (all symbols pre-registered,
+  //       so liftNodeInternal performs pure substitution — no side actions).
   // ------------------------------------------------------------------
-  for (const Node& natVar : natVars)
+
+  // 1a: free variable registration
+  for (const Node& natVar : natFreeVars)
   {
-    std::string intName = "lift_" + natVar.getName();
-    Node intVar = NodeManager::mkRawSymbol(intName, d_nm->integerType());
+    Node intVar = NodeManager::mkRawSymbol(
+        "lift_" + natVar.getName(), d_nm->integerType());
     d_varNatToInt.insert(natVar, intVar);
-    newAssertions.push_back(d_nm->mkNode(Kind::GEQ, intVar, zero));
   }
 
-  // ------------------------------------------------------------------
-  // Phase 2b: lift Nat$-related functions; total-def adds axioms
-  // ------------------------------------------------------------------
-  for (const Node& natFunc : natFuncs)
+  // 1b: bound variable registration (extracted from quantifier nodes)
+  for (const Node& q : natQuantifiers)
+  {
+    for (TNode bv : q[0])
+    {
+      if (isNat(bv.getType()) && d_varNatToInt.find(bv) == d_varNatToInt.end())
+      {
+        Node intBv = NodeManager::mkBoundVar(
+            "lift_" + bv.getName(), d_nm->integerType());
+        d_varNatToInt.insert(bv, intBv);
+        d_liftedNatBVarSet.insert(intBv);
+      }
+    }
+  }
+
+  // 1c: UF registration
+  for (const Node& natFunc : natUFFuncs)
   {
     TypeNode origFuncType = natFunc.getType();
-    size_t arity          = origFuncType.getNumChildren() - 1;
-    bool retWasNat        = isNat(origFuncType[arity]);
-
-    // Check whether the function name encodes a built-in arithmetic op.
-    Kind arithKind = prefixToArithKind(natFunc.getName());
-    if (arithKind != Kind::UNDEFINED_KIND)
-    {
-      // Map original function -> arithmetic Kind; no UF symbol needed.
-      d_funcArithKind[natFunc] = arithKind;
-
-      // Total definition: add  forall x0,...,xn. (premises) => arithOp(x0,...,xn) >= 0
-      if (USE_TOTAL_DEFINITION && retWasNat && arity > 0)
-      {
-        TypeNode intFuncType = createIntAnalogue(origFuncType);
-        std::vector<Node> bvars;
-        bvars.reserve(arity);
-        for (size_t i = 0; i < arity; ++i)
-        {
-          bvars.push_back(
-              NodeManager::mkBoundVar("x" + std::to_string(i), intFuncType[i]));
-        }
-
-        std::vector<Node> premises;
-        for (size_t i = 0; i < arity; ++i)
-        {
-          if (isNat(origFuncType[i]))
-          {
-            premises.push_back(d_nm->mkNode(Kind::GEQ, bvars[i], zero));
-          }
-        }
-
-        Node app        = d_nm->mkNode(arithKind, bvars);
-        Node conclusion = d_nm->mkNode(Kind::GEQ, app, zero);
-
-        Node body;
-        if (premises.empty())
-          body = conclusion;
-        else if (premises.size() == 1)
-          body = d_nm->mkNode(Kind::IMPLIES, premises[0], conclusion);
-        else
-          body = d_nm->mkNode(
-              Kind::IMPLIES, d_nm->mkNode(Kind::AND, premises), conclusion);
-
-        Node bvList = d_nm->mkNode(Kind::BOUND_VAR_LIST, bvars);
-        newAssertions.push_back(d_nm->mkNode(Kind::FORALL, bvList, body));
-      }
-      continue;
-    }
+    size_t   arity        = origFuncType.getNumChildren() - 1;
+    bool     retWasNat    = isNat(origFuncType[arity]);
 
     TypeNode intFuncType = createIntAnalogue(origFuncType);
-    std::string intName  = "lift_" + natFunc.getName();
-
-    Node intFunc = NodeManager::mkRawSymbol(intName, intFuncType);
+    Node intFunc = NodeManager::mkRawSymbol(
+        "lift_" + natFunc.getName(), intFuncType);
     d_funcNatToInt.insert(natFunc, intFunc);
-
-    // Track whether the original function returned Nat$ (used by both methods)
     if (retWasNat)
-    {
       d_liftedNatRetFuncs.insert(intFunc);
-    }
-
-    // -- total definition only: add
-    //      forall x1,...,xn. (premises) => f'(x1,...,xn) >= 0
-    if (USE_TOTAL_DEFINITION && retWasNat)
-    {
-      std::vector<Node> bvars;
-      bvars.reserve(arity);
-      for (size_t i = 0; i < arity; ++i)
-      {
-        bvars.push_back(
-            NodeManager::mkBoundVar("x" + std::to_string(i), intFuncType[i]));
-      }
-
-      // Premise: conjunction of (xi >= 0) for each arg originally Nat$
-      std::vector<Node> premises;
-      for (size_t i = 0; i < arity; ++i)
-      {
-        if (isNat(origFuncType[i]))
-        {
-          premises.push_back(d_nm->mkNode(Kind::GEQ, bvars[i], zero));
-        }
-      }
-
-      // Conclusion: f'(x1,...,xn) >= 0
-      Node app;
-      if (arity == 0)
-      {
-        app = intFunc;
-      }
-      else
-      {
-        std::vector<Node> appArgs;
-        appArgs.push_back(intFunc);
-        appArgs.insert(appArgs.end(), bvars.begin(), bvars.end());
-        app = d_nm->mkNode(Kind::APPLY_UF, appArgs);
-      }
-      Node conclusion = d_nm->mkNode(Kind::GEQ, app, zero);
-
-      Node body;
-      if (premises.empty())
-      {
-        body = conclusion;
-      }
-      else if (premises.size() == 1)
-      {
-        body = d_nm->mkNode(Kind::IMPLIES, premises[0], conclusion);
-      }
-      else
-      {
-        body = d_nm->mkNode(
-            Kind::IMPLIES, d_nm->mkNode(Kind::AND, premises), conclusion);
-      }
-
-      Node axiom;
-      if (arity == 0)
-      {
-        axiom = body;
-      }
-      else
-      {
-        Node bvList = d_nm->mkNode(Kind::BOUND_VAR_LIST, bvars);
-        axiom       = d_nm->mkNode(Kind::FORALL, bvList, body);
-      }
-      newAssertions.push_back(axiom);
-    }
   }
 
-  // ------------------------------------------------------------------
-  // Phase 3: structurally lift existing assertions; collect partial
-  //          constraints for the partial method
-  // ------------------------------------------------------------------
-  for (size_t i = 0, n = assertionsToPreprocess->size(); i < n; ++i)
+  // 1d: arithmetic function registration
+  for (const Node& natFunc : natArithFuncs)
+    d_funcArithKind[natFunc] = prefixToArithKind(natFunc.getName());
+
+  // 1e: structural lift
+  size_t liftedCount = assertionsToPreprocess->size();
+  for (size_t i = 0; i < liftedCount; ++i)
   {
     Node orig   = (*assertionsToPreprocess)[i];
     Node lifted = liftNodeInternal(orig);
-
-    // Partial definition: inject >= 0 constraints at the level of each
-    // atomic predicate that directly contains a Nat$-returning application.
-    if (!USE_TOTAL_DEFINITION)
-    {
-      lifted = injectPartialConstraints(lifted);
-    }
-
     if (lifted != orig)
-    {
       assertionsToPreprocess->replace(i, lifted);
+  }
+
+  // ------------------------------------------------------------------
+  // Step 2: Add non-negativity constraints for variables (shared).
+  //   2a. Free variables: append lift_v >= 0 as a top-level assertion.
+  //   2b. Bound variables: for each quantifier in natQuantifiers, wrap
+  //       its lifted body with the guard.  All quantifiers were
+  //       pre-collected, so liftBoundVar operates on one node at a time
+  //       without recursion.  The results are substituted back into the
+  //       lifted assertions via applyBoundVarSubst.
+  // ------------------------------------------------------------------
+
+  // 2a: free variables
+  for (const Node& natVar : natFreeVars)
+    liftFreeVar(natVar, assertionsToPreprocess);
+
+  // 2b: bound variables — build substitution map, then apply
+  std::unordered_map<Node, Node> qSubst;
+  for (const Node& q : natQuantifiers)
+  {
+    NodeMap::iterator it = d_lifted.find(q);
+    if (it == d_lifted.end()) continue;
+    Node lifted_q  = (*it).second;
+    Node wrapped_q = liftBoundVar(lifted_q);
+    if (wrapped_q != lifted_q)
+      qSubst[lifted_q] = wrapped_q;
+  }
+  if (!qSubst.empty())
+  {
+    std::unordered_map<Node, Node> substCache;
+    for (size_t i = 0; i < liftedCount; ++i)
+    {
+      Node orig   = (*assertionsToPreprocess)[i];
+      Node result = applyBoundVarSubst(d_nm, orig, qSubst, substCache);
+      if (result != orig)
+        assertionsToPreprocess->replace(i, result);
     }
   }
 
   // ------------------------------------------------------------------
-  // Phase 4: append auxiliary assertions (v' >= 0, axioms, partial)
+  // Step 3: Add non-negativity constraints for functions (branched).
+  //   Total:   one global forall axiom per Nat$-returning function.
+  //   Partial: inject f'(args) >= 0 as a conjunct at each atomic
+  //            formula containing a Nat$-returning application.
   // ------------------------------------------------------------------
-  for (const Node& a : newAssertions)
+  if (USE_TOTAL_DEFINITION)
   {
-    assertionsToPreprocess->push_back(a);
+    for (const Node& f : natUFFuncs)   addTotalAxiom(f, assertionsToPreprocess);
+    for (const Node& f : natArithFuncs) addTotalAxiom(f, assertionsToPreprocess);
+  }
+  else
+  {
+    for (size_t i = 0; i < liftedCount; ++i)
+    {
+      Node orig     = (*assertionsToPreprocess)[i];
+      Node injected = injectPartialConstraints(orig);
+      if (injected != orig)
+        assertionsToPreprocess->replace(i, injected);
+    }
   }
 
   return PreprocessingPassResult::NO_CONFLICT;
@@ -308,11 +252,8 @@ TypeNode NatToInt::createIntAnalogue(const TypeNode& tn)
     std::vector<TypeNode> argTypes;
     argTypes.reserve(arity);
     for (size_t i = 0; i < arity; ++i)
-    {
       argTypes.push_back(createIntAnalogue(tn[i]));
-    }
-    TypeNode retType = createIntAnalogue(tn[arity]);
-    return d_nm->mkFunctionType(argTypes, retType);
+    return d_nm->mkFunctionType(argTypes, createIntAnalogue(tn[arity]));
   }
   return tn;
 }
@@ -322,8 +263,10 @@ TypeNode NatToInt::createIntAnalogue(const TypeNode& tn)
 // ===========================================================================
 
 void NatToInt::collectNatSymbols(TNode root,
-                                 std::unordered_set<Node>& natVars,
-                                 std::unordered_set<Node>& natFuncs,
+                                 std::unordered_set<Node>& natFreeVars,
+                                 std::unordered_set<Node>& natUFFuncs,
+                                 std::unordered_set<Node>& natArithFuncs,
+                                 std::unordered_set<Node>& natQuantifiers,
                                  std::unordered_set<Node>& visited)
 {
   std::vector<TNode> toVisit;
@@ -337,8 +280,7 @@ void NatToInt::collectNatSymbols(TNode root,
     if (visited.count(cur)) continue;
     visited.insert(cur);
 
-    // For APPLY_UF the function symbol is an "operator" not a regular child;
-    // we must inspect it explicitly.
+    // For APPLY_UF the function symbol is an operator, not a regular child.
     if (cur.getMetaKind() == metakind::PARAMETERIZED)
     {
       Node op = cur.getOperator();
@@ -348,28 +290,41 @@ void NatToInt::collectNatSymbols(TNode root,
         TypeNode opType = op.getType();
         if (opType.isFunction() && hasNatInSignature(opType))
         {
-          natFuncs.insert(op);
+          if (prefixToArithKind(op.getName()) != Kind::UNDEFINED_KIND)
+            natArithFuncs.insert(op);
+          else
+            natUFFuncs.insert(op);
+        }
+      }
+    }
+
+    // Collect quantifiers that have at least one Nat$ bound variable.
+    if (cur.getKind() == Kind::FORALL || cur.getKind() == Kind::EXISTS)
+    {
+      for (TNode bv : cur[0])
+      {
+        if (isNat(bv.getType()))
+        {
+          natQuantifiers.insert(cur);
+          break;
         }
       }
     }
 
     if (cur.getNumChildren() == 0)
     {
-      // Only free variables of sort Nat$; bound variables are handled inside
-      // liftQuantifier when the enclosing FORALL/EXISTS is processed.
       TypeNode tn = cur.getType();
-      if (isNat(tn) && cur.getKind() != Kind::BOUND_VARIABLE
+      if (isNat(tn)
+          && cur.getKind() != Kind::BOUND_VARIABLE
           && cur.getKind() != Kind::CONST_INTEGER)
       {
-        natVars.insert(cur);
+        natFreeVars.insert(cur);
       }
     }
     else
     {
       for (TNode child : cur)
-      {
         toVisit.push_back(child);
-      }
     }
   }
 }
@@ -389,209 +344,233 @@ Node NatToInt::liftNodeInternal(TNode n)
   Node result;
   Kind k = n.getKind();
 
-  // FORALL / EXISTS: delegate to liftQuantifier (handles bound vars +
-  // partial-def body constraints + nat-var guard)
-  if (k == Kind::FORALL || k == Kind::EXISTS)
-  {
-    result = liftQuantifier(n);
-    d_lifted.insert(n, result);
-    return result;
-  }
-
-  // Leaf: look up in the variable map (covers free and bound Nat$ vars
-  // registered by an enclosing liftQuantifier call)
+  // Leaf: integer literal re-emitted as Int constant; other leaves looked up.
   if (n.getNumChildren() == 0)
   {
-    // Integer literal used as Nat$ value: re-emit as a proper Int constant.
-    if (n.getKind() == Kind::CONST_INTEGER)
+    if (k == Kind::CONST_INTEGER)
     {
       result = d_nm->mkConstInt(n.getConst<Rational>());
-      d_lifted.insert(n, result);
-      return result;
     }
-    NodeMap::iterator vit = d_varNatToInt.find(n);
-    result = (vit != d_varNatToInt.end()) ? (*vit).second : Node(n);
+    else
+    {
+      NodeMap::iterator vit = d_varNatToInt.find(n);
+      result = (vit != d_varNatToInt.end()) ? (*vit).second : Node(n);
+    }
     d_lifted.insert(n, result);
     return result;
   }
 
-  // Non-leaf: recurse, replacing the operator for PARAMETERIZED kinds
-  bool changed = false;
-  std::vector<Node> newChildren;
-
+  // Non-leaf PARAMETERIZED: check for arithmetic rewrite first.
   if (n.getMetaKind() == metakind::PARAMETERIZED)
   {
     Node op = n.getOperator();
 
-    // Check if this UF encodes a built-in arithmetic operation.
     auto arithIt = d_funcArithKind.find(op);
     if (arithIt != d_funcArithKind.end())
     {
-      // Lift arguments and build the arithmetic node (no UF operator).
       std::vector<Node> arithArgs;
       for (TNode child : n)
-      {
         arithArgs.push_back(liftNodeInternal(child));
-      }
       result = d_nm->mkNode(arithIt->second, arithArgs);
-      // Partial def: track nodes from Nat$-returning arithmetic functions.
       TypeNode opType = op.getType();
       if (isNat(opType[opType.getNumChildren() - 1]))
-      {
         d_arithNatRetApps.insert(result);
-      }
       d_lifted.insert(n, result);
       return result;
     }
 
+    // UF: substitute operator if registered, then recurse into arguments.
     NodeMap::iterator fop = d_funcNatToInt.find(op);
     Node newOp = (fop != d_funcNatToInt.end()) ? (*fop).second : op;
-    newChildren.push_back(newOp);
-    changed = (newOp != op);
+    bool changed = (newOp != op);
+    std::vector<Node> newChildren = {newOp};
+    for (TNode child : n)
+    {
+      Node nc = liftNodeInternal(child);
+      newChildren.push_back(nc);
+      changed = changed || (nc != child);
+    }
+    result = changed ? d_nm->mkNode(k, newChildren) : Node(n);
+    d_lifted.insert(n, result);
+    return result;
   }
 
+  // Non-leaf non-PARAMETERIZED (includes FORALL, EXISTS, connectives, etc.):
+  // recurse into all children.  Nat$ bound variables in BOUND_VAR_LISTs have
+  // been pre-registered in d_varNatToInt and are substituted as leaves.
+  bool changed = false;
+  std::vector<Node> newChildren;
   for (TNode child : n)
   {
     Node nc = liftNodeInternal(child);
     newChildren.push_back(nc);
     changed = changed || (nc != child);
   }
-
   result = changed ? d_nm->mkNode(k, newChildren) : Node(n);
   d_lifted.insert(n, result);
   return result;
 }
 
 // ===========================================================================
-// Quantifier lifting
+// Free variable constraint
 // ===========================================================================
 
-Node NatToInt::liftQuantifier(TNode n)
+void NatToInt::liftFreeVar(TNode natVar, AssertionPipeline* ap)
 {
-  Assert(n.getKind() == Kind::FORALL || n.getKind() == Kind::EXISTS);
-
-  Kind  qkind  = n.getKind();
-  TNode bvList = n[0];
-  TNode body   = n[1];
-  Node  zero   = d_nm->mkConstInt(Rational(0));
-
-  // --- 1. Create Int bound-vars for Nat$ bound-vars ----------------------
-  std::vector<Node> newBvars;
-  std::vector<Node> natVarGuards;
-  bool anyNat = false;
-
-  for (TNode bv : bvList)
-  {
-    if (isNat(bv.getType()))
-    {
-      // Fresh Int bound variable named lift_<original>
-      Node intBv = NodeManager::mkBoundVar("lift_" + bv.getName(),
-                                           d_nm->integerType());
-      // Register so liftNodeInternal replaces bv -> intBv in the body
-      d_varNatToInt.insert(bv, intBv);
-      newBvars.push_back(intBv);
-      natVarGuards.push_back(d_nm->mkNode(Kind::GEQ, intBv, zero));
-      anyNat = true;
-    }
-    else
-    {
-      newBvars.push_back(Node(bv));
-    }
-  }
-
-  Node newBvList = d_nm->mkNode(Kind::BOUND_VAR_LIST, newBvars);
-
-  // --- 2. Lift the body -------------------------------------------------
-  Node liftedBody = liftNodeInternal(body);
-
-  // --- 3. (Partial def) inject constraints at the correct predicate level --
-  //
-  //   injectPartialConstraints recurses through logical connectives so that
-  //   each >= 0 constraint lands alongside the atomic predicate that directly
-  //   contains the Nat$-returning application, not at the formula root.
-  if (!USE_TOTAL_DEFINITION)
-  {
-    liftedBody = injectPartialConstraints(liftedBody);
-  }
-
-  // --- 4. Apply non-negativity guard for Nat$ bound vars ----------------
-  //
-  //   FORALL: (v1'>=0 /\ ... /\ vm'>=0) -> liftedBody
-  //   EXISTS: (v1'>=0 /\ ... /\ vm'>=0) /\ liftedBody
-  Node newBody;
-  if (!anyNat)
-  {
-    newBody = liftedBody;
-  }
-  else
-  {
-    Node guard;
-    if (natVarGuards.size() == 1)
-    {
-      guard = natVarGuards[0];
-    }
-    else
-    {
-      guard = d_nm->mkNode(Kind::AND, natVarGuards);
-    }
-
-    newBody = (qkind == Kind::FORALL)
-                  ? d_nm->mkNode(Kind::IMPLIES, guard, liftedBody)
-                  : d_nm->mkNode(Kind::AND, guard, liftedBody);
-  }
-
-  // Preserve optional third child (INST_PATTERN_LIST) if present
-  if (n.getNumChildren() > 2)
-  {
-    Node patterns = liftNodeInternal(n[2]);
-    return d_nm->mkNode(qkind, newBvList, newBody, patterns);
-  }
-
-  return d_nm->mkNode(qkind, newBvList, newBody);
+  NodeMap::iterator it = d_varNatToInt.find(natVar);
+  Assert(it != d_varNatToInt.end());
+  Node zero = d_nm->mkConstInt(Rational(0));
+  ap->push_back(d_nm->mkNode(Kind::GEQ, (*it).second, zero));
 }
 
 // ===========================================================================
-// Partial definition constraint collection
+// Bound variable constraint
 // ===========================================================================
 
-void NatToInt::collectPartialConstraints(TNode liftedExpr,
-                                         std::vector<Node>& out)
+Node NatToInt::liftBoundVar(TNode liftedQ)
 {
-  // Stop at quantifier boundaries; constraints inside have already been
-  // folded into the body by liftQuantifier.
-  Kind k = liftedExpr.getKind();
-  if (k == Kind::FORALL || k == Kind::EXISTS)
+  Kind k = liftedQ.getKind();
+  Assert(k == Kind::FORALL || k == Kind::EXISTS);
+
+  Node zero = d_nm->mkConstInt(Rational(0));
+  std::vector<Node> guards;
+  for (TNode bv : liftedQ[0])
   {
+    if (d_liftedNatBVarSet.find(Node(bv)) != d_liftedNatBVarSet.end())
+      guards.push_back(d_nm->mkNode(Kind::GEQ, Node(bv), zero));
+  }
+
+  if (guards.empty()) return Node(liftedQ);
+
+  Node guard = guards.size() == 1
+                   ? guards[0]
+                   : d_nm->mkNode(Kind::AND, guards);
+  Node guardedBody = (k == Kind::FORALL)
+                         ? d_nm->mkNode(Kind::IMPLIES, guard, liftedQ[1])
+                         : d_nm->mkNode(Kind::AND, guard, liftedQ[1]);
+  return liftedQ.getNumChildren() > 2
+             ? d_nm->mkNode(k, liftedQ[0], guardedBody, liftedQ[2])
+             : d_nm->mkNode(k, liftedQ[0], guardedBody);
+}
+
+// ===========================================================================
+// Quantifier substitution helper
+// ===========================================================================
+
+static Node applyBoundVarSubst(NodeManager* nm,
+                                TNode n,
+                                const std::unordered_map<Node, Node>& subst,
+                                std::unordered_map<Node, Node>& cache)
+{
+  auto cit = cache.find(Node(n));
+  if (cit != cache.end()) return cit->second;
+
+  auto sit = subst.find(Node(n));
+  if (sit != subst.end())
+  {
+    // Recurse into the substituted result so nested quantifiers are handled.
+    Node result = applyBoundVarSubst(nm, sit->second, subst, cache);
+    cache[Node(n)] = result;
+    return result;
+  }
+
+  if (n.getNumChildren() == 0)
+  {
+    cache[Node(n)] = Node(n);
+    return Node(n);
+  }
+
+  bool changed = false;
+  std::vector<Node> newChildren;
+  if (n.getMetaKind() == metakind::PARAMETERIZED)
+    newChildren.push_back(n.getOperator());
+  for (TNode child : n)
+  {
+    Node nc = applyBoundVarSubst(nm, child, subst, cache);
+    newChildren.push_back(nc);
+    changed = changed || (nc != child);
+  }
+  Node result = changed ? nm->mkNode(n.getKind(), newChildren) : Node(n);
+  cache[Node(n)] = result;
+  return result;
+}
+
+// ===========================================================================
+// Total definition axiom
+// ===========================================================================
+
+void NatToInt::addTotalAxiom(TNode natFunc, AssertionPipeline* ap)
+{
+  TypeNode origFuncType = natFunc.getType();
+  size_t   arity        = origFuncType.getNumChildren() - 1;
+  bool     retWasNat    = isNat(origFuncType[arity]);
+  if (!retWasNat) return;
+
+  Node zero      = d_nm->mkConstInt(Rational(0));
+  Kind arithKind = prefixToArithKind(natFunc.getName());
+
+  if (arithKind != Kind::UNDEFINED_KIND)
+  {
+    // Arithmetic op returning Nat$: forall over Int bound vars.
+    if (arity == 0) return;
+    TypeNode intFuncType = createIntAnalogue(origFuncType);
+    std::vector<Node> bvars;
+    for (size_t i = 0; i < arity; ++i)
+      bvars.push_back(NodeManager::mkBoundVar(
+          "x" + std::to_string(i), intFuncType[i]));
+
+    std::vector<Node> premises;
+    for (size_t i = 0; i < arity; ++i)
+      if (isNat(origFuncType[i]))
+        premises.push_back(d_nm->mkNode(Kind::GEQ, bvars[i], zero));
+
+    Node app        = d_nm->mkNode(arithKind, bvars);
+    Node conclusion = d_nm->mkNode(Kind::GEQ, app, zero);
+    Node body = premises.empty()       ? conclusion
+                : premises.size() == 1 ? d_nm->mkNode(Kind::IMPLIES,
+                                                       premises[0], conclusion)
+                                       : d_nm->mkNode(Kind::IMPLIES,
+                                                      d_nm->mkNode(Kind::AND, premises),
+                                                      conclusion);
+    ap->push_back(d_nm->mkNode(Kind::FORALL,
+                               d_nm->mkNode(Kind::BOUND_VAR_LIST, bvars),
+                               body));
     return;
   }
 
-  // For APPLY_UF (and any PARAMETERIZED node): check the operator.
-  // If the operator is a lifted Nat$-returning function, add expr >= 0.
-  if (liftedExpr.getMetaKind() == metakind::PARAMETERIZED)
-  {
-    Node op = liftedExpr.getOperator();
-    if (d_liftedNatRetFuncs.find(op) != d_liftedNatRetFuncs.end())
-    {
-      Node zero = d_nm->mkConstInt(Rational(0));
-      out.push_back(d_nm->mkNode(Kind::GEQ, Node(liftedExpr), zero));
-    }
-  }
+  // UF returning Nat$: forall axiom using the registered Int symbol.
+  NodeMap::iterator fit = d_funcNatToInt.find(natFunc);
+  Assert(fit != d_funcNatToInt.end());
+  Node     intFunc     = (*fit).second;
+  TypeNode intFuncType = intFunc.getType();
 
-  // For arithmetic nodes that originated from a Nat$-returning function,
-  // add expr >= 0 at the same scope.
-  if (d_arithNatRetApps.find(Node(liftedExpr)) != d_arithNatRetApps.end())
-  {
-    Node zero = d_nm->mkConstInt(Rational(0));
-    out.push_back(d_nm->mkNode(Kind::GEQ, Node(liftedExpr), zero));
-  }
+  std::vector<Node> bvars;
+  for (size_t i = 0; i < arity; ++i)
+    bvars.push_back(NodeManager::mkBoundVar(
+        "x" + std::to_string(i), intFuncType[i]));
 
-  // Recurse into all children (arguments for APPLY_UF, sub-formulas for
-  // connectives, etc.).  This ensures that Nat$-returning applications
-  // nested inside non-Nat$-returning ones are also captured.
-  for (TNode child : liftedExpr)
-  {
-    collectPartialConstraints(child, out);
-  }
+  std::vector<Node> premises;
+  for (size_t i = 0; i < arity; ++i)
+    if (isNat(origFuncType[i]))
+      premises.push_back(d_nm->mkNode(Kind::GEQ, bvars[i], zero));
+
+  std::vector<Node> appArgs = {intFunc};
+  appArgs.insert(appArgs.end(), bvars.begin(), bvars.end());
+  Node app = (arity == 0) ? intFunc
+                          : d_nm->mkNode(Kind::APPLY_UF, appArgs);
+  Node conclusion = d_nm->mkNode(Kind::GEQ, app, zero);
+  Node body = premises.empty()       ? conclusion
+              : premises.size() == 1 ? d_nm->mkNode(Kind::IMPLIES,
+                                                     premises[0], conclusion)
+                                     : d_nm->mkNode(Kind::IMPLIES,
+                                                    d_nm->mkNode(Kind::AND, premises),
+                                                    conclusion);
+  Node axiom = (arity == 0)
+                   ? body
+                   : d_nm->mkNode(Kind::FORALL,
+                                  d_nm->mkNode(Kind::BOUND_VAR_LIST, bvars),
+                                  body);
+  ap->push_back(axiom);
 }
 
 // ===========================================================================
@@ -602,16 +581,18 @@ Node NatToInt::injectPartialConstraints(TNode n)
 {
   Kind k = n.getKind();
 
-  // Stop at quantifier boundaries — liftQuantifier already injected
-  // constraints into the quantifier body.
+  // Quantifiers: recurse into the body only (n[1]); bound-var list and
+  // optional pattern list are left untouched.
   if (k == Kind::FORALL || k == Kind::EXISTS)
   {
-    return Node(n);
+    Node newBody = injectPartialConstraints(n[1]);
+    if (newBody == n[1]) return Node(n);
+    return n.getNumChildren() > 2
+               ? d_nm->mkNode(k, n[0], newBody, n[2])
+               : d_nm->mkNode(k, n[0], newBody);
   }
 
-  // Logical connectives: recurse into each sub-formula so that constraints
-  // land alongside the atomic predicate that contains the function application,
-  // not at the root of the whole formula.
+  // Logical connectives: recurse so constraints land at atomic formulas.
   if (k == Kind::AND || k == Kind::OR || k == Kind::IMPLIES)
   {
     bool changed = false;
@@ -625,17 +606,41 @@ Node NatToInt::injectPartialConstraints(TNode n)
     return changed ? d_nm->mkNode(k, newChildren) : Node(n);
   }
 
-  // Atomic formula (comparison, predicate application, equality, etc.):
-  // collect all >= 0 constraints from Nat$-returning sub-expressions and
-  // prepend them as a conjunction at this level.
-  std::vector<Node> constraints;
-  collectPartialConstraints(n, constraints);
-  if (constraints.empty())
+  // Atomic formula (step 1): collect Nat$-returning applications (step 2)
+  // and conjunct their >= 0 constraints (step 3).
+  std::vector<Node> apps;
+  collectNatRetApps(n, apps);
+  if (apps.empty()) return Node(n);
+
+  Node zero = d_nm->mkConstInt(Rational(0));
+  std::vector<Node> conjuncts;
+  for (const Node& app : apps)
+    conjuncts.push_back(d_nm->mkNode(Kind::GEQ, app, zero));
+  conjuncts.push_back(Node(n));
+  return d_nm->mkNode(Kind::AND, conjuncts);
+}
+
+// ===========================================================================
+// Partial definition — Nat$-returning application collection
+// ===========================================================================
+
+void NatToInt::collectNatRetApps(TNode liftedExpr, std::vector<Node>& apps)
+{
+  // UF application whose operator originally returned Nat$.
+  if (liftedExpr.getMetaKind() == metakind::PARAMETERIZED)
   {
-    return Node(n);
+    Node op = liftedExpr.getOperator();
+    if (d_liftedNatRetFuncs.find(op) != d_liftedNatRetFuncs.end())
+      apps.push_back(Node(liftedExpr));
   }
-  constraints.push_back(Node(n));
-  return d_nm->mkNode(Kind::AND, constraints);
+
+  // Arithmetic node that originated from a Nat$-returning arithmetic function.
+  if (d_arithNatRetApps.find(Node(liftedExpr)) != d_arithNatRetApps.end())
+    apps.push_back(Node(liftedExpr));
+
+  // Recurse into all subterms including quantifier bodies.
+  for (TNode child : liftedExpr)
+    collectNatRetApps(child, apps);
 }
 
 }  // namespace passes

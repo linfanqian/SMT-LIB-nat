@@ -1,33 +1,24 @@
 /* The natural number preprocessing pass.
  *
- * Lift all variables, bounded variables, and functions of sort Nat$ to Int,
+ * Lift all sort Nat$ in variables and functions to Int,
  * adding non-negativity constraints:
  *
  *   Free variables:
  *     For each x :: Nat$, introduce x' :: Int and assert x' >= 0 (top-level).
  *
- *   Bounded variables (quantifiers):
- *     FORALL [v :: Nat$] body  -->  FORALL [v' :: Int] (v' >= 0) -> body'
- *     EXISTS [v :: Nat$] body  -->  EXISTS [v' :: Int] (v' >= 0) /\ body'
+ *   Bound variables (quantifiers):
+ *     forall [v :: Nat$] body  -->  forall [v' :: Int] (v' >= 0) -> body'
+ *     exists [v :: Nat$] body  -->  exists [v' :: Int] (v' >= 0) /\ body'
  *
  *   Functions — two methods selectable via USE_TOTAL_DEFINITION in nat_to_int.cpp:
  *
  *     Total definition (USE_TOTAL_DEFINITION = true, default):
- *       For each f :: T1 x...x Tn -> Nat$, add a top-level axiom
- *         forall x1,...,xn. (xi >= 0 for every Nat$ arg xi) => f'(x1,...,xn) >= 0
+ *       For each f :: x1,...,xm, a1,...,an -> Nat$ where xi are Nat$, add a top-level axiom
+ *         forall x1',...,xm',a1,...,an. (xi' >= 0) -> f'(x1',...,xm') >= 0
  *
  *     Partial definition (USE_TOTAL_DEFINITION = false):
- *       For every function application f'(args) where f originally consumed
- *       and/or returned Nat$ (i.e. f is in the Nat$-related set), add >= 0
- *       constraints for every Nat$-typed sub-expression inside f'(args) that
- *       is not a free variable (free variables already have their own top-level
- *       >= 0 assertion), plus >= 0 for f'(args) itself when f returned Nat$.
- *       All such constraints are placed at the *same quantifier scope* as the
- *       function application:
- *         - top-level occurrence -> separate top-level assertions
- *         - occurrence in a quantifier body -> ANDed into that body
- *       Stops at FORALL/EXISTS boundaries: inner constraints are already
- *       folded in by liftQuantifier.
+ *       For every atomic formula, recursively find functions f(args) -> Nat$.
+ *       Add f'(args') >= 0 at the level of atomic formula.
  */
 
 #include "cvc5_private.h"
@@ -64,18 +55,18 @@ class NatToInt : public PreprocessingPass
 
   NodeManager* d_nm;
 
-  /** original Nat$ variable/bound-var -> its Int analogue */
+  /** original Nat$ variable (free or bound) -> its Int analogue */
   NodeMap d_varNatToInt;
-  /** original Nat$-related function -> its Int-signature analogue (UF) */
+  /** original non-arithmetic Nat$-related UF -> its Int-signature analogue */
   NodeMap d_funcNatToInt;
-  /** original Nat$-related function -> built-in arithmetic Kind
-   *  (populated when the function name starts with a recognised prefix) */
+  /** original Nat$-related function -> built-in arithmetic Kind */
   std::unordered_map<Node, Kind> d_funcArithKind;
-  /** lifted function nodes whose original return type was Nat$ */
+  /** lifted UF nodes whose original return type was Nat$ */
   NodeSet d_liftedNatRetFuncs;
-  /** lifted arithmetic nodes (e.g. (+ a b)) that originated from a
-   *  Nat$-returning arithmetic-prefixed function; used by partial def */
+  /** lifted arithmetic nodes that originated from a Nat$-returning function */
   NodeSet d_arithNatRetApps;
+  /** lifted Int bound variables that were originally Nat$ bound variables */
+  NodeSet d_liftedNatBVarSet;
   /** memoisation: original node -> structurally-lifted node */
   NodeMap d_lifted;
 
@@ -93,54 +84,65 @@ class NatToInt : public PreprocessingPass
   // -----------------------------------------------------------------------
   // Symbol collection
   // -----------------------------------------------------------------------
-  /** Collect free Nat$ variables (into natVars) and Nat$-related function
-   *  symbols (into natFuncs) that appear in the tree rooted at root. */
+  /** Collect Nat$-related symbols from root into four disjoint sets:
+   *    natFreeVars   — free variables of sort Nat$
+   *    natUFFuncs    — non-arithmetic UFs with Nat$ in their signature
+   *    natArithFuncs — arithmetic-prefixed functions with Nat$ in signature
+   *    natQuantifiers— FORALL/EXISTS nodes that have at least one Nat$
+   *                    bound variable */
   void collectNatSymbols(TNode root,
-                         std::unordered_set<Node>& natVars,
-                         std::unordered_set<Node>& natFuncs,
+                         std::unordered_set<Node>& natFreeVars,
+                         std::unordered_set<Node>& natUFFuncs,
+                         std::unordered_set<Node>& natArithFuncs,
+                         std::unordered_set<Node>& natQuantifiers,
                          std::unordered_set<Node>& visited);
 
   // -----------------------------------------------------------------------
   // Lifting
   // -----------------------------------------------------------------------
-  /** Pure structural lift: replaces Nat$ vars/funcs with Int analogues.
-   *  Handles FORALL/EXISTS via liftQuantifier.
+  /** Pure structural lift: replaces Nat$ vars/funcs with their Int analogues
+   *  (looked up in d_varNatToInt / d_funcNatToInt / d_funcArithKind).
+   *  All symbols must be pre-registered before calling this.
    *  Results are cached in d_lifted. */
   Node liftNodeInternal(TNode n);
 
-  /** Lift a FORALL or EXISTS node:
-   *  1. Create fresh Int bound-vars for Nat$ bound-vars and register in
-   *     d_varNatToInt so that body processing picks them up.
-   *  2. Lift the body via liftNodeInternal.
-   *  3. (Partial def) collect same-scope constraints from the lifted body
-   *     and AND them into the body before applying the nat-var guard.
-   *  4. Wrap with (v' >= 0) -> ... for FORALL, (v' >= 0) /\ ... for EXISTS.
-   *  Returns the lifted quantifier; no constraints escape upward. */
-  Node liftQuantifier(TNode n);
+  /** Add a top-level non-negativity assertion for a free Nat$ variable.
+   *  Requires natVar to already be registered in d_varNatToInt. */
+  void liftFreeVar(TNode natVar, AssertionPipeline* ap);
+
+  /** Given a single already-lifted FORALL/EXISTS node whose bound-variable
+   *  list contains variables in d_liftedNatBVarSet, return a new node with
+   *  the body wrapped by the guard:
+   *    FORALL: (v' >= 0 /\ ...) -> body
+   *    EXISTS: (v' >= 0 /\ ...) /\ body
+   *  Does not recurse — all quantifiers are pre-collected by collectNatSymbols
+   *  and processed individually by the caller. */
+  Node liftBoundVar(TNode liftedQ);
 
   // -----------------------------------------------------------------------
-  // Partial definition constraint collection
+  // Total definition axiom
   // -----------------------------------------------------------------------
-  /** Walk an already-lifted expression and append to out a ">= 0" node for
-   *  every sub-expression that is an application of a Nat$-returning lifted
-   *  function.  This captures both the return-value constraint AND the
-   *  constraint for Nat$-typed arguments/sub-arguments:
-   *    - Nat$-returning applications at any depth yield their own >= 0.
-   *    - Non-Nat$-returning applications are transparent (we recurse into
-   *      their arguments), so any Nat$-typed argument is still found.
-   *  Stops at FORALL/EXISTS boundaries; inner constraints are already folded
-   *  into the body by liftQuantifier and must not be re-emitted at an outer
-   *  scope. */
-  void collectPartialConstraints(TNode liftedExpr,
-                                 std::vector<Node>& out);
+  /** Build and append the global non-negativity forall axiom for natFunc.
+   *  Handles both arithmetic-prefixed functions (via d_funcArithKind) and
+   *  UFs (via d_funcNatToInt).  Does nothing if natFunc does not return Nat$. */
+  void addTotalAxiom(TNode natFunc, AssertionPipeline* ap);
 
-  /** Walk an already-lifted formula and inject >= 0 constraints at the level
-   *  of each atomic predicate that directly contains a Nat$-returning
-   *  application.  Logical connectives (AND, OR, IMPLIES) are treated as
-   *  transparent: the method recurses through them so that constraints end up
-   *  alongside the innermost predicate, not at the formula root.
-   *  Stops at FORALL/EXISTS boundaries (liftQuantifier handles those). */
+  // -----------------------------------------------------------------------
+  // Partial definition constraint injection
+  // -----------------------------------------------------------------------
+  /** Step 1: identify each atomic formula in an already-lifted formula.
+   *  Step 2: collect Nat$-returning applications in its subterms.
+   *  Step 3: conjunct f'(args) >= 0 for each such application at the
+   *  level of that atomic formula.
+   *  Logical connectives (AND, OR, IMPLIES) and quantifiers (FORALL, EXISTS)
+   *  are traversed transparently. */
   Node injectPartialConstraints(TNode liftedFormula);
+
+  /** Walk an already-lifted subterm and append to apps every sub-expression
+   *  that is an application of a Nat$-returning lifted function
+   *  (either a UF in d_liftedNatRetFuncs or an arithmetic node in
+   *  d_arithNatRetApps).  Recurses into all children including quantifiers. */
+  void collectNatRetApps(TNode liftedExpr, std::vector<Node>& apps);
 };
 
 }  // namespace passes
