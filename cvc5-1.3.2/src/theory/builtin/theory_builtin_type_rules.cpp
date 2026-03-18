@@ -40,15 +40,13 @@ TypeNode EqualityTypeRule::computeType(NodeManager* nodeManager,
     TypeNode rhsType = n[1].getTypeOrNull();
     if (!lhsType.isComparableTo(rhsType))
     {
-      // Allow Nat$ (uninterpreted sort) to be equated with Int literals;
-      // the nat-to-int preprocessing pass (which runs before apply-substs)
-      // will lift both sides to Int before the rewriter sees the assertion.
-      bool natIntMixed =
+      // Allow Int numerals (CONST_INTEGER) used for Nat$ sort
+      // The nat-to-int preprocessing pass will lifts Nat$ to Int
+      bool natIntNumeralMixed =
           (lhsType.isUninterpretedSort() && lhsType.getName() == "Nat$"
-           && rhsType.isInteger())
-          || (rhsType.isUninterpretedSort() && rhsType.getName() == "Nat$"
-              && lhsType.isInteger());
-      if (!natIntMixed)
+           && rhsType.isInteger()
+           && n[1].getKind() == Kind::CONST_INTEGER);
+      if (!natIntNumeralMixed)
       {
         if (errOut)
         {
