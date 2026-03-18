@@ -74,11 +74,15 @@ TypeNode UfTypeRule::computeType(NodeManager* nodeManager,
       TypeNode currentArgumentType = *argument_type_it;
       if (!currentArgument.isComparableTo(currentArgumentType))
       {
-        // Allow Int numerals (CONST_INTEGER) used for Nat$ sort
-        // The nat-to-int preprocessing pass will lifts Nat$ to Int
+        // Allow any Int expression used for a Nat$ argument.
+        // The nat-to-int preprocessing pass lifts Nat$ to Int; before that
+        // pass runs, Int values (including non-constant expressions) may
+        // appear where Nat$ is expected.
         bool natIntNumeralMixed =
             (currentArgumentType.isUninterpretedSort() && currentArgumentType.getName() == "Nat$"
-             && currentArgument.isInteger() && (*argument_it).getKind() == Kind::CONST_INTEGER);
+             && currentArgument.isInteger())
+            || (currentArgument.isUninterpretedSort() && currentArgument.getName() == "Nat$"
+                && currentArgumentType.isInteger());
         if (!natIntNumeralMixed)
         {
           if (errOut)
